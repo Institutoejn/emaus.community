@@ -10,65 +10,107 @@ import Community from './pages/Community';
 import Profile from './pages/Profile';
 import Layout from './components/Layout';
 import { User, UserRole, Course } from './types';
-
-const INITIAL_COURSES: Course[] = [
-  {
-    id: '1',
-    title: 'A Jornada de Fé',
-    description: 'Como começar a tua caminhada com Cristo de forma sólida e perseverante.',
-    youtubeUrl: 'https://www.youtube.com/embed/dQw4w9WgXcQ',
-    thumbnail: 'https://picsum.photos/seed/bible/600/400'
-  },
-  {
-    id: '2',
-    title: 'Interpretando Parábolas',
-    description: 'Descobre os mistérios por trás das histórias que Jesus contou aos seus discípulos.',
-    youtubeUrl: 'https://www.youtube.com/embed/dQw4w9WgXcQ',
-    thumbnail: 'https://picsum.photos/seed/jesus/600/400'
-  }
-];
+import { supabase } from './services/supabase';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [courses, setCourses] = useState<Course[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Fetch initial data (Session & Courses)
   useEffect(() => {
-    const savedUser = localStorage.getItem('emaus_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
+    const initApp = async () => {
+      // 1. Check active session
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session?.user) {
+        await fetchUserProfile(session.user.id);
+      }
 
-    const savedCourses = localStorage.getItem('emaus_courses');
-    if (savedCourses) {
-      setCourses(JSON.parse(savedCourses));
-    } else {
-      setCourses(INITIAL_COURSES);
-      localStorage.setItem('emaus_courses', JSON.stringify(INITIAL_COURSES));
-    }
-    
-    setLoading(false);
+      // 2. Fetch Courses
+      await fetchCourses();
+
+      // 3. Listen for auth changes
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+        if (session?.user) {
+          await fetchUserProfile(session.user.id);
+        } else {
+          setUser(null);
+        }
+      });
+
+      setLoading(false);
+      return () => subscription.unsubscribe();
+    };
+
+    initApp();
   }, []);
 
-  const handleLogin = (mockUser: User) => {
-    setUser(mockUser);
-    localStorage.setItem('emaus_user', JSON.stringify(mockUser));
+  const fetchUserProfile = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (data && !error) {
+        // Mapeamento Correto: DB (snake_case) -> App (camelCase)
+        setUser({
+          id: data.id,
+          name: data.name,
+          username: data.username,
+          email: data.email,
+          interest: data.interest,
+          role: data.role as UserRole,
+          createdAt: new Date(data.created_at).getTime(),
+          avatarUrl: data.avatar_url, // Importante: mapeia avatar_url para avatarUrl
+          phone: data.phone,
+          bio: data.bio
+        });
+      }
+    } catch (error) {
+      console.error("Erro ao buscar perfil:", error);
+    }
   };
 
-  const handleLogout = () => {
+  const fetchCourses = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('courses')
+        .select('*')
+        .order('created_at', { ascending: false });
+      
+      if (data && !error) {
+        const mappedCourses: Course[] = data.map((c: any) => ({
+          id: c.id.toString(),
+          title: c.title,
+          description: c.description,
+          youtubeUrl: c.youtube_url,
+          thumbnail: c.thumbnail
+        }));
+        setCourses(mappedCourses);
+      }
+    } catch (error) {
+      console.error("Erro ao buscar cursos:", error);
+    }
+  };
+
+  const handleLogin = (user: User) => {
+    setUser(user);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
-    localStorage.removeItem('emaus_user');
   };
 
   const handleUpdateUser = (updatedUser: User) => {
     setUser(updatedUser);
-    localStorage.setItem('emaus_user', JSON.stringify(updatedUser));
   };
 
   const handleAddCourse = (newCourse: Course) => {
-    const updated = [newCourse, ...courses];
-    setCourses(updated);
-    localStorage.setItem('emaus_courses', JSON.stringify(updated));
+    setCourses([newCourse, ...courses]);
   };
 
   if (loading) return (
@@ -87,11 +129,11 @@ const App: React.FC = () => {
             <Route path="/" element={<Navigate to="/home" />} />
             <Route path="/home" element={<Home user={user} />} />
             <Route path="/mentor" element={<Mentor user={user} />} />
-            <Route path="/courses" element={<Courses user={user} courses={courses} onAddCourse={handleAddCourse} />} />
+            <Route path="/courses" element={<Courses user={user} courses={courses} onAddCourse={handleAddCourse} refreshCourses={fetchCourses} />} />
             <Route path="/community" element={<Community user={user} />} />
             <Route path="/profile" element={<Profile user={user} onUpdate={handleUpdateUser} />} />
             {user.role === UserRole.ADMIN && (
-              <Route path="/admin" element={<Dashboard courses={courses} onAddCourse={handleAddCourse} />} />
+              <Route path="/admin" element={<Dashboard courses={courses} onAddCourse={handleAddCourse} refreshCourses={fetchCourses} />} />
             )}
           </Route>
         ) : (

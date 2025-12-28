@@ -1,6 +1,7 @@
 
 import React, { useState, useRef } from 'react';
 import { User, UserRole } from '../types';
+import { supabase } from '../services/supabase';
 
 interface ProfileProps {
   user: User;
@@ -9,8 +10,8 @@ interface ProfileProps {
 
 const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
   const [formData, setFormData] = useState({
-    name: user.name,
-    email: user.email,
+    name: user.name || '',
+    email: user.email || '',
     phone: user.phone || '',
     bio: user.bio || '',
     avatarUrl: user.avatarUrl || ''
@@ -21,6 +22,9 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      // Nota: Idealmente, faríamos upload para o Supabase Storage aqui.
+      // Como não configuramos buckets, vamos manter o FileReader para base64 
+      // mas sabendo que o tamanho da string pode ser limitado no DB.
       const reader = new FileReader();
       reader.onloadend = () => {
         setFormData({ ...formData, avatarUrl: reader.result as string });
@@ -29,19 +33,42 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
     
-    // Simulando delay de rede
-    setTimeout(() => {
+    try {
+      const updates = {
+        name: formData.name,
+        // email: formData.email, // Email change in Supabase requires auth.updateUser, usually simpler to keep read-only here
+        phone: formData.phone,
+        bio: formData.bio,
+        avatar_url: formData.avatarUrl,
+        updated_at: new Date(),
+      };
+
+      const { error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', user.id);
+
+      if (error) throw error;
+
+      // Update local state
       onUpdate({
         ...user,
-        ...formData
+        name: formData.name,
+        phone: formData.phone,
+        bio: formData.bio,
+        avatarUrl: formData.avatarUrl
       });
-      setIsSaving(false);
       alert('Perfil atualizado com sucesso!');
-    }, 600);
+    } catch (error) {
+      console.error('Erro ao atualizar perfil:', error);
+      alert('Erro ao salvar alterações.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -106,8 +133,8 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
                 <input 
                   type="email" 
                   value={formData.email}
-                  onChange={e => setFormData({...formData, email: e.target.value})}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 text-sm focus:ring-2 focus:ring-[#3533cd] focus:outline-none transition-all font-medium"
+                  disabled
+                  className="w-full bg-slate-100 border border-slate-200 rounded-2xl px-5 py-4 text-sm text-slate-500 cursor-not-allowed font-medium"
                 />
               </div>
               <div className="md:col-span-2 space-y-2">

@@ -1,33 +1,62 @@
 
 import React, { useState } from 'react';
 import { User, UserRole, Course } from '../types';
+import { supabase } from '../services/supabase';
 
 interface CoursesProps {
   user: User;
   courses: Course[];
   onAddCourse: (course: Course) => void;
+  refreshCourses?: () => void;
 }
 
-const Courses: React.FC<CoursesProps> = ({ user, courses, onAddCourse }) => {
+const Courses: React.FC<CoursesProps> = ({ user, courses, onAddCourse, refreshCourses }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newUrl, setNewUrl] = useState('');
   const [newDesc, setNewDesc] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAddCourse = (e: React.FormEvent) => {
+  const handleAddCourse = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newCourse: Course = {
-      id: Date.now().toString(),
-      title: newTitle,
-      description: newDesc || 'Novo curso adicionado pelo gestor para a comunidade.',
-      youtubeUrl: newUrl,
-      thumbnail: `https://picsum.photos/seed/${Date.now()}/600/400`
-    };
-    onAddCourse(newCourse);
-    setShowAddModal(false);
-    setNewTitle('');
-    setNewUrl('');
-    setNewDesc('');
+    setIsSubmitting(true);
+
+    try {
+      const { data, error } = await supabase
+        .from('courses')
+        .insert([
+          {
+            title: newTitle,
+            description: newDesc || 'Novo curso adicionado pelo gestor para a comunidade.',
+            youtube_url: newUrl,
+            thumbnail: `https://picsum.photos/seed/${Date.now()}/600/400`
+          }
+        ])
+        .select();
+
+      if (error) throw error;
+
+      if (data) {
+        const createdCourse: Course = {
+          id: data[0].id.toString(),
+          title: data[0].title,
+          description: data[0].description,
+          youtubeUrl: data[0].youtube_url,
+          thumbnail: data[0].thumbnail
+        };
+        onAddCourse(createdCourse);
+        if (refreshCourses) refreshCourses();
+        setShowAddModal(false);
+        setNewTitle('');
+        setNewUrl('');
+        setNewDesc('');
+      }
+    } catch (error) {
+      console.error("Erro ao adicionar curso:", error);
+      alert("Erro ao adicionar curso. Verifique se tem permissão.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -49,22 +78,28 @@ const Courses: React.FC<CoursesProps> = ({ user, courses, onAddCourse }) => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {courses.map((course) => (
-          <div key={course.id} className="emaus-card rounded-[2rem] overflow-hidden shadow-xl shadow-slate-200/50 hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-300 group">
-            <div className="aspect-video relative overflow-hidden bg-slate-900">
-              <iframe
-                src={course.youtubeUrl}
-                title={course.title}
-                className="w-full h-full"
-                allowFullScreen
-              ></iframe>
-            </div>
-            <div className="p-8">
-              <h3 className="text-xl font-black text-black mb-3 group-hover:text-[#3533cd] transition-colors">{course.title}</h3>
-              <p className="text-slate-500 text-sm leading-relaxed font-medium line-clamp-2">{course.description}</p>
-            </div>
+        {courses.length === 0 ? (
+          <div className="col-span-full text-center py-10 text-slate-400 font-medium">
+            Nenhum curso disponível no momento.
           </div>
-        ))}
+        ) : (
+          courses.map((course) => (
+            <div key={course.id} className="emaus-card rounded-[2rem] overflow-hidden shadow-xl shadow-slate-200/50 hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-300 group">
+              <div className="aspect-video relative overflow-hidden bg-slate-900">
+                <iframe
+                  src={course.youtubeUrl}
+                  title={course.title}
+                  className="w-full h-full"
+                  allowFullScreen
+                ></iframe>
+              </div>
+              <div className="p-8">
+                <h3 className="text-xl font-black text-black mb-3 group-hover:text-[#3533cd] transition-colors">{course.title}</h3>
+                <p className="text-slate-500 text-sm leading-relaxed font-medium line-clamp-2">{course.description}</p>
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
       {showAddModal && (
@@ -113,9 +148,10 @@ const Courses: React.FC<CoursesProps> = ({ user, courses, onAddCourse }) => {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 bg-[#3533cd] hover:bg-blue-700 active:bg-blue-800 text-white py-4 rounded-2xl font-black shadow-lg shadow-blue-500/20 active:scale-90 transition-all"
+                  disabled={isSubmitting}
+                  className="flex-1 bg-[#3533cd] hover:bg-blue-700 active:bg-blue-800 text-white py-4 rounded-2xl font-black shadow-lg shadow-blue-500/20 active:scale-90 transition-all disabled:opacity-70"
                 >
-                  Publicar Curso
+                  {isSubmitting ? 'Salvando...' : 'Publicar Curso'}
                 </button>
               </div>
             </form>

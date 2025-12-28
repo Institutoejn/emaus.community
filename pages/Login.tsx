@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { User, UserRole } from '../types';
+import { supabase } from '../services/supabase';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -14,6 +15,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [interest, setInterest] = useState('Parábolas de Jesus');
   const [isRegistering, setIsRegistering] = useState(false);
   const [selectedRole, setSelectedRole] = useState<UserRole>(UserRole.USER);
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const interestOptions = [
     'Parábolas de Jesus',
@@ -25,21 +28,102 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     'Liderança Cristã'
   ];
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Simulação de persistência: em produção usaríamos Firebase Auth + Firestore
-    const mockUser: User = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: isRegistering ? name : (email === 'admin@emaus.com' ? 'Gestor Davi' : email.split('@')[0]),
-      username: isRegistering ? (username.startsWith('@') ? username : `@${username}`) : (email === 'admin@emaus.com' ? '@davi_gestor' : `@${email.split('@')[0]}`),
-      email: email,
-      interest: isRegistering ? interest : (email === 'admin@emaus.com' ? 'Liderança Cristã' : 'Geral'),
-      role: isRegistering ? UserRole.USER : (email === 'admin@emaus.com' ? UserRole.ADMIN : selectedRole),
-      createdAt: Date.now()
-    };
+    setLoading(true);
+    setErrorMsg('');
 
-    onLogin(mockUser);
+    try {
+      if (isRegistering) {
+        // REGISTRO
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email,
+          password,
+        });
+
+        if (authError) throw authError;
+
+        if (authData.user) {
+          const newUser: User = {
+            id: authData.user.id,
+            email: email,
+            name: name,
+            username: username.startsWith('@') ? username : `@${username}`,
+            interest: interest,
+            role: UserRole.USER, 
+            createdAt: Date.now()
+          };
+
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .insert([
+              {
+                id: newUser.id,
+                email: newUser.email,
+                name: newUser.name,
+                username: newUser.username,
+                interest: newUser.interest,
+                role: newUser.role
+              }
+            ]);
+
+          if (profileError) throw profileError;
+
+          onLogin(newUser);
+        } else {
+          setErrorMsg('Verifique seu email para confirmar o cadastro (se habilitado).');
+        }
+
+      } else {
+        // LOGIN
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (authError) throw authError;
+
+        if (authData.user) {
+          // Buscar dados do perfil
+          const { data: profileData, error: profileError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', authData.user.id)
+            .single();
+
+          if (profileError) {
+             console.error('Perfil não encontrado, criando fallback...', profileError);
+             const fallbackUser: User = {
+                id: authData.user.id,
+                name: email.split('@')[0],
+                email: email,
+                role: UserRole.USER,
+                createdAt: Date.now()
+             };
+             onLogin(fallbackUser);
+          } else {
+            // Mapeamento DB -> App
+            onLogin({
+              id: profileData.id,
+              name: profileData.name,
+              username: profileData.username,
+              email: profileData.email,
+              interest: profileData.interest,
+              role: profileData.role as UserRole,
+              createdAt: new Date(profileData.created_at).getTime(),
+              avatarUrl: profileData.avatar_url,
+              phone: profileData.phone,
+              bio: profileData.bio
+            });
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('Erro de autenticação:', error);
+      setErrorMsg(error.message || 'Ocorreu um erro. Verifique seus dados.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -55,31 +139,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </p>
         </div>
 
-        {/* Seleção de Cargo apenas visível no Login. No Cadastro, o usuário é sempre USER por padrão. */}
-        {!isRegistering && (
-          <div className="flex p-1.5 bg-slate-100 rounded-2xl mb-6 md:mb-8">
-            <button
-              onClick={() => setSelectedRole(UserRole.USER)}
-              className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-black transition-all active:scale-95 ${
-                selectedRole === UserRole.USER 
-                  ? 'bg-white text-[#3533cd] shadow-md' 
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              <i className="fa-solid fa-person-rays"></i>
-              Jovem
-            </button>
-            <button
-              onClick={() => setSelectedRole(UserRole.ADMIN)}
-              className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-black transition-all active:scale-95 ${
-                selectedRole === UserRole.ADMIN 
-                  ? 'bg-white text-[#3533cd] shadow-md' 
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              <i className="fa-solid fa-shield-halved"></i>
-              Gestor
-            </button>
+        {/* Mensagem de Erro */}
+        {errorMsg && (
+          <div className="mb-4 p-3 bg-red-50 text-red-600 text-xs font-bold rounded-xl border border-red-100 text-center">
+            {errorMsg}
           </div>
         )}
 
@@ -151,10 +214,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
           <button
             type="submit"
-            className="w-full bg-[#3533cd] text-white font-black py-4 md:py-5 rounded-2xl hover:bg-blue-700 transition-all active:scale-95 shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 mt-2"
+            disabled={loading}
+            className="w-full bg-[#3533cd] text-white font-black py-4 md:py-5 rounded-2xl hover:bg-blue-700 transition-all active:scale-95 shadow-xl shadow-blue-500/30 flex items-center justify-center gap-2 mt-2 disabled:opacity-70"
           >
-            {isRegistering ? 'Finalizar Cadastro' : `Entrar na Plataforma`}
-            <i className="fa-solid fa-arrow-right text-sm"></i>
+            {loading ? <i className="fa-solid fa-spinner animate-spin"></i> : (isRegistering ? 'Finalizar Cadastro' : `Entrar na Plataforma`)}
+            {!loading && <i className="fa-solid fa-arrow-right text-sm"></i>}
           </button>
         </form>
 
@@ -162,7 +226,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <button
             onClick={() => {
               setIsRegistering(!isRegistering);
-              setSelectedRole(UserRole.USER); // Reseta para User ao alternar para cadastro
+              setErrorMsg('');
             }}
             className="text-sm font-bold text-[#3533cd] hover:underline transition-all active:scale-95"
           >

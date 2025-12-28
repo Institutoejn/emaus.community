@@ -1,27 +1,22 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, UserRole, Course } from '../types';
+import { supabase } from '../services/supabase';
 
 interface DashboardProps {
   courses: Course[];
   onAddCourse: (course: Course) => void;
+  refreshCourses?: () => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse }) => {
-  // Dados simulando o retorno da coleção 'users' do Firestore
-  const [users, setUsers] = useState<User[]>([
-    { id: '1', name: 'João Silva', username: '@joaosilva', email: 'joao@example.com', role: UserRole.USER, interest: 'Parábolas de Jesus', createdAt: Date.now() - 86400000 },
-    { id: '2', name: 'Maria Santos', username: '@maria_fe', email: 'maria@example.com', role: UserRole.USER, interest: 'Salmos e Poesia', createdAt: Date.now() - 43200000 },
-    { id: '3', name: 'Gestor Davi', username: '@davi_gestor', email: 'admin@emaus.com', role: UserRole.ADMIN, interest: 'Liderança Cristã', createdAt: Date.now() - 172800000 },
-    { id: '4', name: 'Pedro Miguel', username: '@pedro_miguel', email: 'pedro@example.com', role: UserRole.USER, interest: 'Cartas de Paulo', createdAt: Date.now() },
-  ]);
-
+const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCourses }) => {
+  const [users, setUsers] = useState<User[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [newCourse, setNewCourse] = useState({ title: '', description: '', url: '' });
   
-  // Estados para Edição de Usuário
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(true);
 
   const trendingTopics = [
     { topic: 'Ansiedade e Paz', count: '45%', icon: 'fa-heart-pulse' },
@@ -29,24 +24,92 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse }) => {
     { topic: 'Perdão Familiar', count: '23%', icon: 'fa-hands-holding-child' }
   ];
 
-  const handleAddCourseSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const course: Course = {
-      id: Date.now().toString(),
-      title: newCourse.title,
-      description: newCourse.description,
-      youtubeUrl: newCourse.url,
-      thumbnail: `https://picsum.photos/seed/${Date.now()}/600/400`
-    };
-    onAddCourse(course);
-    setNewCourse({ title: '', description: '', url: '' });
-    alert('Curso publicado com sucesso!');
+  useEffect(() => {
+    fetchUsers();
+  }, []);
+
+  const fetchUsers = async () => {
+    try {
+      setLoadingUsers(true);
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      if (data) {
+        // Mapeamento correto para o Dashboard
+        const mappedUsers: User[] = data.map((u: any) => ({
+          id: u.id,
+          name: u.name,
+          username: u.username,
+          email: u.email,
+          interest: u.interest,
+          role: u.role as UserRole,
+          createdAt: new Date(u.created_at).getTime(),
+          avatarUrl: u.avatar_url,
+          phone: u.phone,
+          bio: u.bio
+        }));
+        setUsers(mappedUsers);
+      }
+    } catch (error) {
+      console.error("Erro ao buscar usuários:", error);
+    } finally {
+      setLoadingUsers(false);
+    }
   };
 
-  // Funções de Gestão de Usuários
-  const handleDeleteUser = (id: string) => {
+  const handleAddCourseSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const { data, error } = await supabase
+        .from('courses')
+        .insert([
+          {
+            title: newCourse.title,
+            description: newCourse.description,
+            youtube_url: newCourse.url,
+            thumbnail: `https://picsum.photos/seed/${Date.now()}/600/400`
+          }
+        ])
+        .select();
+
+      if (error) throw error;
+
+      if (data) {
+        const createdCourse: Course = {
+          id: data[0].id.toString(),
+          title: data[0].title,
+          description: data[0].description,
+          youtubeUrl: data[0].youtube_url,
+          thumbnail: data[0].thumbnail
+        };
+        onAddCourse(createdCourse);
+        if (refreshCourses) refreshCourses();
+        setNewCourse({ title: '', description: '', url: '' });
+        alert('Curso publicado com sucesso!');
+      }
+    } catch (error) {
+      console.error("Erro ao adicionar curso:", error);
+      alert("Erro ao publicar curso.");
+    }
+  };
+
+  const handleDeleteUser = async (id: string) => {
     if (window.confirm('Atenção Gestor Davi: Tens a certeza que queres remover permanentemente este discípulo da plataforma?')) {
-      setUsers(users.filter(u => u.id !== id));
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .delete()
+          .eq('id', id);
+
+        if (error) throw error;
+        setUsers(users.filter(u => u.id !== id));
+      } catch (error) {
+        console.error("Erro ao deletar usuário:", error);
+        alert("Erro ao remover usuário.");
+      }
     }
   };
 
@@ -55,19 +118,36 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse }) => {
     setIsEditModalOpen(true);
   };
 
-  const handleUpdateUser = (e: React.FormEvent) => {
+  const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
     
-    setUsers(users.map(u => u.id === editingUser.id ? editingUser : u));
-    setIsEditModalOpen(false);
-    setEditingUser(null);
-    alert('Perfil do discípulo atualizado com sucesso!');
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          name: editingUser.name,
+          username: editingUser.username,
+          interest: editingUser.interest,
+          // email: editingUser.email // Email update via Auth API usually required
+        })
+        .eq('id', editingUser.id);
+
+      if (error) throw error;
+
+      setUsers(users.map(u => u.id === editingUser.id ? editingUser : u));
+      setIsEditModalOpen(false);
+      setEditingUser(null);
+      alert('Perfil do discípulo atualizado com sucesso!');
+    } catch (error) {
+      console.error("Erro ao atualizar usuário:", error);
+      alert("Erro ao atualizar perfil.");
+    }
   };
 
   const filteredUsers = users.filter(u => 
-    u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    u.username?.toLowerCase().includes(searchTerm.toLowerCase())
+    (u.name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) || 
+    (u.username?.toLowerCase() || '').includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -239,70 +319,78 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse }) => {
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-50 bg-slate-50/10">
-                <th className="px-8 py-6">Nome Completo / Username</th>
-                <th className="px-8 py-6">Interesse Bíblico</th>
-                <th className="px-8 py-6">Status / Cargo</th>
-                <th className="px-8 py-6">Data de Ingresso</th>
-                <th className="px-8 py-6 text-center">Gestão</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {filteredUsers.map((u) => (
-                <tr key={u.id} className="hover:bg-slate-50/50 transition-all group">
-                  <td className="px-8 py-5">
-                    <div className="flex items-center gap-4">
-                      <div className="w-11 h-11 rounded-2xl bg-slate-100 flex items-center justify-center font-black text-[#3533cd] border border-slate-200 shrink-0 group-hover:scale-110 transition-transform">
-                        {u.name[0]}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-black text-black text-sm truncate">{u.name}</p>
-                        <p className="text-[10px] text-slate-400 font-bold">{u.username}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-8 py-5">
-                    <div className="flex items-center gap-2">
-                       <span className="w-2 h-2 rounded-full bg-blue-400"></span>
-                       <p className="text-xs font-black text-slate-600 italic">"{u.interest || 'Geral'}"</p>
-                    </div>
-                  </td>
-                  <td className="px-8 py-5">
-                    <span className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider shadow-sm border ${
-                      u.role === UserRole.ADMIN 
-                        ? 'bg-indigo-50 text-indigo-600 border-indigo-100' 
-                        : 'bg-blue-50 text-[#3533cd] border-blue-100'
-                    }`}>
-                      {u.role === UserRole.ADMIN ? 'GESTOR DAVI' : 'JOVEM DISCÍPULO'}
-                    </span>
-                  </td>
-                  <td className="px-8 py-5 text-slate-400 text-xs font-bold">
-                    {new Date(u.createdAt).toLocaleDateString('pt-BR')}
-                  </td>
-                  <td className="px-8 py-5">
-                    <div className="flex items-center justify-center gap-2">
-                       <button 
-                        onClick={() => openEditModal(u)}
-                        className="w-9 h-9 bg-white border border-slate-200 rounded-xl text-[#3533cd] hover:border-[#3533cd] hover:bg-blue-50 transition-all active:scale-90 flex items-center justify-center shadow-sm"
-                        title="Editar Perfil"
-                       >
-                         <i className="fa-solid fa-pen-to-square text-xs"></i>
-                       </button>
-                       <button 
-                        onClick={() => handleDeleteUser(u.id)}
-                        className="w-9 h-9 bg-red-50 text-red-600 border border-red-100 rounded-xl hover:bg-red-600 hover:text-white transition-all active:scale-90 flex items-center justify-center shadow-sm"
-                        title="Remover Discípulo"
-                       >
-                         <i className="fa-solid fa-trash-can text-xs"></i>
-                       </button>
-                    </div>
-                  </td>
+          {loadingUsers ? (
+            <div className="p-8 text-center text-slate-400 font-bold">Carregando discípulos...</div>
+          ) : (
+            <table className="w-full text-left">
+              <thead>
+                <tr className="text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-50 bg-slate-50/10">
+                  <th className="px-8 py-6">Nome Completo / Username</th>
+                  <th className="px-8 py-6">Interesse Bíblico</th>
+                  <th className="px-8 py-6">Status / Cargo</th>
+                  <th className="px-8 py-6">Data de Ingresso</th>
+                  <th className="px-8 py-6 text-center">Gestão</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {filteredUsers.map((u) => (
+                  <tr key={u.id} className="hover:bg-slate-50/50 transition-all group">
+                    <td className="px-8 py-5">
+                      <div className="flex items-center gap-4">
+                        <div className="w-11 h-11 rounded-2xl bg-slate-100 flex items-center justify-center font-black text-[#3533cd] border border-slate-200 shrink-0 group-hover:scale-110 transition-transform overflow-hidden">
+                          {u.avatarUrl ? (
+                            <img src={u.avatarUrl} alt={u.name} className="w-full h-full object-cover" />
+                          ) : (
+                            u.name ? u.name[0] : '?'
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-black text-black text-sm truncate">{u.name}</p>
+                          <p className="text-[10px] text-slate-400 font-bold">{u.username}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-8 py-5">
+                      <div className="flex items-center gap-2">
+                         <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                         <p className="text-xs font-black text-slate-600 italic">"{u.interest || 'Geral'}"</p>
+                      </div>
+                    </td>
+                    <td className="px-8 py-5">
+                      <span className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider shadow-sm border ${
+                        u.role === UserRole.ADMIN 
+                          ? 'bg-indigo-50 text-indigo-600 border-indigo-100' 
+                          : 'bg-blue-50 text-[#3533cd] border-blue-100'
+                      }`}>
+                        {u.role === UserRole.ADMIN ? 'GESTOR DAVI' : 'JOVEM DISCÍPULO'}
+                      </span>
+                    </td>
+                    <td className="px-8 py-5 text-slate-400 text-xs font-bold">
+                      {new Date(u.createdAt).toLocaleDateString('pt-BR')}
+                    </td>
+                    <td className="px-8 py-5">
+                      <div className="flex items-center justify-center gap-2">
+                         <button 
+                          onClick={() => openEditModal(u)}
+                          className="w-9 h-9 bg-white border border-slate-200 rounded-xl text-[#3533cd] hover:border-[#3533cd] hover:bg-blue-50 transition-all active:scale-90 flex items-center justify-center shadow-sm"
+                          title="Editar Perfil"
+                         >
+                           <i className="fa-solid fa-pen-to-square text-xs"></i>
+                         </button>
+                         <button 
+                          onClick={() => handleDeleteUser(u.id)}
+                          className="w-9 h-9 bg-red-50 text-red-600 border border-red-100 rounded-xl hover:bg-red-600 hover:text-white transition-all active:scale-90 flex items-center justify-center shadow-sm"
+                          title="Remover Discípulo"
+                         >
+                           <i className="fa-solid fa-trash-can text-xs"></i>
+                         </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
         <div className="p-6 bg-slate-50/50 border-t border-slate-100 flex justify-center">
            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fim da Lista de Membros • Total: {filteredUsers.length}</p>
