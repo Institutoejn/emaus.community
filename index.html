@@ -35,25 +35,21 @@
       body {
         background-color: #ffffff;
         color: var(--emaus-black);
-        /* Padronização do Corpo de Texto */
         font-weight: 400;
         line-height: 1.6;
         -webkit-tap-highlight-color: transparent;
       }
 
-      /* Hierarquia de Títulos */
       h1, h2, h3, h4, .font-black {
         font-weight: 900 !important;
         line-height: 1.2;
       }
 
-      /* Estilização de Parágrafos e Labels */
       p, span, label, td, input, select, textarea {
         font-weight: 400;
         line-height: 1.6;
       }
 
-      /* Pesos específicos para componentes UI */
       .font-bold, .font-medium, button {
         font-weight: 700;
       }
@@ -105,5 +101,7 @@
 </head>
 <body>
     <div id="root" style="height: 100%;"></div>
+    <!-- Script de entrada que conecta o HTML ao React -->
+    <script type="module" src="./index.tsx"></script>
 </body>
 </html>
