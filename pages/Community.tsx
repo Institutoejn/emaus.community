@@ -36,6 +36,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
   const [members, setMembers] = useState<User[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sending, setSending] = useState(false);
+  const [creatingDm, setCreatingDm] = useState(false);
 
   // Form Data
   const [groupFormData, setGroupFormData] = useState({ 
@@ -53,7 +54,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     fetchMembers();
 
     // Polling de segurança para grupos (caso realtime falhe)
-    const interval = setInterval(fetchGroups, 20000); 
+    const interval = setInterval(fetchGroups, 10000); 
     return () => clearInterval(interval);
   }, []);
 
@@ -97,7 +98,10 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     if (error) console.error("Erro grupos:", error);
     if (data) {
       setGroups(data);
-      if (!activeChatId && data.length > 0) setActiveChatId(data[0].id);
+      if (!activeChatId && data.length > 0) {
+        // Only set default if not already set, to avoid jumping
+        // setActiveChatId(data[0].id); 
+      }
     }
   };
 
@@ -170,20 +174,69 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
 
   const handleSaveGroup = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { error } = await supabase.from('chat_groups').insert([{
+    const { data, error } = await supabase.from('chat_groups').insert([{
       name: groupFormData.name,
       description: groupFormData.description,
       icon: groupFormData.icon,
       type: groupFormData.type,
       created_by: user.id
-    }]);
+    }]).select().single();
 
     if (error) {
       alert('Erro ao criar grupo. Verifique permissões.');
     } else {
-      fetchGroups();
+      await fetchGroups();
       setShowGroupModal(false);
       setGroupFormData({ name: '', description: '', icon: 'fa-users', type: 'public' });
+      if (data) {
+        handleSelectChat(data.id);
+      }
+    }
+  };
+
+  // Lógica para Criar ou Abrir Chat Privado
+  const handleStartDirectChat = async (targetUser: User) => {
+    if (targetUser.id === user.id) return;
+    setCreatingDm(true);
+
+    try {
+      // 1. Tenta encontrar um grupo privado existente com nome padrão "A & B" ou "B & A"
+      // Nota: Em uma app real, teríamos uma tabela 'chat_members', mas usaremos convenção de nome para simplificar este MVP
+      const chatName1 = `${user.name} & ${targetUser.name}`;
+      const chatName2 = `${targetUser.name} & ${user.name}`;
+
+      const existingGroup = groups.find(g => 
+        g.type === 'private' && (g.name === chatName1 || g.name === chatName2)
+      );
+
+      if (existingGroup) {
+        handleSelectChat(existingGroup.id);
+        setSelectedMember(null);
+        setActiveTab('groups');
+      } else {
+        // 2. Cria novo grupo privado
+        const { data, error } = await supabase.from('chat_groups').insert([{
+          name: chatName1,
+          description: 'Conversa Privada',
+          icon: 'fa-comments',
+          type: 'private',
+          created_by: user.id
+        }]).select().single();
+
+        if (error) throw error;
+
+        if (data) {
+          await fetchGroups(); // Atualiza lista
+          handleSelectChat(data.id); // Abre o chat
+          setSelectedMember(null);
+          setActiveTab('groups');
+        }
+      }
+    } catch (error: any) {
+      console.error("Erro ao criar DM:", error);
+      alert("Não foi possível iniciar o chat.");
+    } finally {
+      setCreatingDm(false);
     }
   };
 
@@ -222,6 +275,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
               <button 
                 onClick={() => { setGroupFormData({ name: '', description: '', icon: 'fa-users', type: 'public' }); setShowGroupModal(true); }}
                 className="w-10 h-10 rounded-xl bg-[#3533cd] text-white flex items-center justify-center hover:scale-110 transition-all shadow-lg active:scale-95"
+                title="Criar Grupo Público"
               >
                 <i className="fa-solid fa-plus text-sm"></i>
               </button>
@@ -266,7 +320,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
                   <div className="flex-1 text-left overflow-hidden">
                     <div className="flex justify-between items-center">
                       <h4 className="text-sm font-black text-black truncate">{chat.name}</h4>
-                      {chat.type === 'private' && <i className="fa-solid fa-lock text-[8px] text-slate-400"></i>}
+                      {chat.type === 'private' && <i className="fa-solid fa-lock text-[8px] text-[#3533cd]" title="Privado"></i>}
                     </div>
                     <p className="text-[10px] text-slate-500 truncate font-bold mt-0.5 uppercase tracking-tight">{chat.description}</p>
                   </div>
@@ -288,9 +342,10 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
                   <div className={`w-12 h-12 rounded-full flex items-center justify-center font-black text-white shadow-md bg-[#3533cd] overflow-hidden`}>
                     {member.avatarUrl ? <img src={member.avatarUrl} alt={member.name} className="w-full h-full object-cover" /> : member.name[0]}
                   </div>
+                  {member.id === user.id && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>}
                 </div>
                 <div className="flex-1 text-left overflow-hidden">
-                  <h4 className="text-sm font-black text-black truncate">{member.name}</h4>
+                  <h4 className="text-sm font-black text-black truncate">{member.name} {member.id === user.id && '(Você)'}</h4>
                   <p className="text-xs text-slate-500 truncate font-medium mt-0.5">{member.role === UserRole.ADMIN ? 'Gestor Davi' : 'Discípulo'}</p>
                 </div>
               </button>
@@ -315,8 +370,9 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
                     <i className={`fa-solid ${currentChatInfo.icon} text-white text-lg`}></i>
                 </div>
                 <div className="min-w-0">
-                  <h3 className="font-black text-black text-sm md:text-base truncate">
+                  <h3 className="font-black text-black text-sm md:text-base truncate flex items-center gap-2">
                     {currentChatInfo.name}
+                    {currentChatInfo.type === 'private' && <span className="text-[10px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">Privado</span>}
                   </h3>
                   <div className="flex items-center gap-2">
                     <p className="text-[10px] md:text-xs font-bold text-green-500 flex items-center gap-1.5">
@@ -343,6 +399,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
               <button 
                 onClick={() => handleDeleteGroup(activeChatId)}
                 className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-100 transition-all shadow-sm active:scale-95"
+                title="Apagar Grupo"
               >
                 <i className="fa-solid fa-trash-can text-sm"></i>
               </button>
@@ -479,6 +536,26 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
                     ))}
                   </div>
                 </div>
+
+                <div>
+                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 ml-1">Tipo</label>
+                   <div className="flex gap-2">
+                      <button 
+                        type="button"
+                        onClick={() => setGroupFormData({...groupFormData, type: 'public'})}
+                        className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all border ${groupFormData.type === 'public' ? 'bg-[#3533cd] text-white border-[#3533cd]' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
+                      >
+                        Público
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setGroupFormData({...groupFormData, type: 'private'})}
+                        className={`flex-1 py-3 rounded-xl text-xs font-bold transition-all border ${groupFormData.type === 'private' ? 'bg-[#3533cd] text-white border-[#3533cd]' : 'bg-slate-50 text-slate-400 border-slate-200'}`}
+                      >
+                        Privado
+                      </button>
+                   </div>
+                </div>
               </div>
 
               <div className="flex gap-4 pt-6 border-t border-slate-50">
@@ -522,6 +599,20 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
               <div className="mt-6 p-4 bg-slate-50 rounded-2xl">
                 <p className="text-xs text-slate-600 font-medium leading-relaxed italic">"{selectedMember.bio || 'Sem biografia disponível.'}"</p>
               </div>
+              
+              {/* Botão de Enviar Mensagem (NOVO) */}
+              {selectedMember.id !== user.id && (
+                <div className="mt-6">
+                  <button 
+                    onClick={() => handleStartDirectChat(selectedMember)}
+                    disabled={creatingDm}
+                    className="w-full bg-[#3533cd] text-white py-4 rounded-2xl font-black shadow-xl shadow-blue-500/20 hover:bg-blue-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+                  >
+                    {creatingDm ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-paper-plane"></i>}
+                    Enviar Mensagem
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
