@@ -1,0 +1,7 @@
+{
+  "name": "Copy of EMAÚS - Plataforma Bíblica",
+  "description": "Um ambiente seguro para jovens interagirem sobre a Bíblia, com mentor IA, cursos e chat comunitário.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
