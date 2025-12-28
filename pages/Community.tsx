@@ -136,33 +136,46 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     // Não mostramos loading no refresh automatico para não piscar
     if (messages.length === 0) setLoadingMessages(true);
 
-    let query = supabase
-      .from('chat_messages')
-      .select(`
-        id, content, created_at, user_id, group_id, recipient_id,
-        profiles ( name, avatar_url )
-      `)
-      .order('created_at', { ascending: true })
-      .limit(100);
+    try {
+      let query = supabase
+        .from('chat_messages')
+        .select(`
+          id, content, created_at, user_id, group_id, recipient_id,
+          profiles ( name, avatar_url )
+        `)
+        .order('created_at', { ascending: true })
+        .limit(100);
 
-    if (activeChat.type === 'group') {
-      // Mensagens do Grupo
-      query = query.eq('group_id', activeChat.id);
-    } else {
-      // Mensagens Diretas (Bidirecional: Eu->Ele ou Ele->Eu)
-      // Supabase não suporta "OR" complexo facilmente no builder básico sem o filtro 'or'
-      // Sintaxe: .or(`and(user_id.eq.${uid},recipient_id.eq.${rid}),and(user_id.eq.${rid},recipient_id.eq.${uid})`)
-      query = query.or(`and(user_id.eq.${user.id},recipient_id.eq.${activeChat.id}),and(user_id.eq.${activeChat.id},recipient_id.eq.${user.id})`);
-    }
+      if (activeChat.type === 'group') {
+        // Mensagens do Grupo
+        query = query.eq('group_id', activeChat.id);
+      } else {
+        // Mensagens Diretas (Simplificado)
+        // 1. Garante que não é mensagem de grupo
+        query = query.is('group_id', null);
+        
+        // 2. Busca mensagens onde o 'outro' usuário está envolvido
+        // Como o RLS já filtra "user_id = eu OR recipient_id = eu",
+        // basta filtrar por "user_id = outro OR recipient_id = outro"
+        // Resultado = Interseção = Conversa entre EU e OUTRO
+        query = query.or(`user_id.eq.${activeChat.id},recipient_id.eq.${activeChat.id}`);
+      }
 
-    const { data, error } = await query;
+      const { data, error } = await query;
+        
+      if (error) {
+        console.error("Erro ao buscar mensagens:", error);
+        throw error;
+      } 
       
-    if (error) {
-      console.error("Erro ao buscar mensagens:", error);
-    } else if (data) {
-      setMessages(data as unknown as ChatMessage[]);
+      if (data) {
+        setMessages(data as unknown as ChatMessage[]);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingMessages(false);
     }
-    setLoadingMessages(false);
   };
 
   const handleSend = async (e: React.FormEvent) => {
