@@ -86,14 +86,14 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
       }
 
       // Atualiza o banco de dados
+      // Corrigido: Removido 'updated_at' que causava erro
       const { error } = await supabase
         .from('profiles')
         .update({
           name: formData.name,
           phone: formData.phone,
           bio: formData.bio,
-          avatar_url: finalAvatarUrl,
-          updated_at: new Date().toISOString(),
+          avatar_url: finalAvatarUrl
         })
         .eq('id', user.id);
 

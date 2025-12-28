@@ -35,6 +35,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [members, setMembers] = useState<User[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [sending, setSending] = useState(false);
 
   // Form Data
   const [groupFormData, setGroupFormData] = useState({ 
@@ -51,8 +52,8 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     fetchGroups();
     fetchMembers();
 
-    // Opcional: Polling simples para manter a lista de grupos atualizada
-    const interval = setInterval(fetchGroups, 10000); 
+    // Polling para manter grupos atualizados
+    const interval = setInterval(fetchGroups, 15000); 
     return () => clearInterval(interval);
   }, []);
 
@@ -63,11 +64,14 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
       
       // Subscribe to new messages in this group
       const channel = supabase
-        .channel('public:chat_messages')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `group_id=eq.${activeChatId}` }, 
-        (payload) => {
-           // When a new message arrives, just fetch all again to get profile data joined easily (or simpler: optimistic update)
-           // For simplicity, we fetch recent messages
+        .channel(`chat:${activeChatId}`)
+        .on('postgres_changes', { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'chat_messages', 
+          filter: `group_id=eq.${activeChatId}` 
+        }, 
+        () => {
            fetchMessages(activeChatId);
         })
         .subscribe();
@@ -95,7 +99,6 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
   const fetchMembers = async () => {
     const { data } = await supabase.from('profiles').select('*');
     if (data) {
-      // Mapear snake_case para camelCase
       const mapped: User[] = data.map((u: any) => ({
         id: u.id,
         name: u.name,
@@ -110,8 +113,10 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
   };
 
   const fetchMessages = async (groupId: number) => {
-    setLoadingMessages(true);
-    const { data } = await supabase
+    // Não seta loading true se já tiver mensagens (para evitar piscar no polling/realtime)
+    if (messages.length === 0) setLoadingMessages(true);
+    
+    const { data, error } = await supabase
       .from('chat_messages')
       .select(`
         id, 
@@ -124,7 +129,9 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
       .order('created_at', { ascending: true })
       .limit(50);
       
-    if (data) {
+    if (error) {
+      console.error("Erro ao buscar mensagens:", error);
+    } else if (data) {
       setMessages(data as unknown as ChatMessage[]);
     }
     setLoadingMessages(false);
@@ -135,19 +142,25 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     if (!input.trim() || !activeChatId) return;
 
     const text = input.trim();
-    setInput(''); // Clear immediately
+    setInput(''); // Limpa imediatamente para UX rápida
+    setSending(true);
 
-    const { error } = await supabase.from('chat_messages').insert([
-      { group_id: activeChatId, user_id: user.id, content: text }
-    ]);
+    try {
+      const { error } = await supabase.from('chat_messages').insert([
+        { group_id: activeChatId, user_id: user.id, content: text }
+      ]);
 
-    if (error) {
+      if (error) throw error;
+      
+      // O realtime deve atualizar, mas chamamos o fetch por garantia
+      await fetchMessages(activeChatId);
+      
+    } catch (error: any) {
       console.error('Erro ao enviar:', error);
-      alert('Erro ao enviar mensagem.');
-      setInput(text); // Restore text on error
-    } else {
-      // Optimistic update or wait for subscription
-      fetchMessages(activeChatId);
+      alert(`Erro ao enviar mensagem: ${error.message || 'Verifique sua conexão.'}`);
+      setInput(text); // Restaura o texto em caso de erro
+    } finally {
+      setSending(false);
     }
   };
 
@@ -162,7 +175,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     }]);
 
     if (error) {
-      alert('Erro ao criar grupo.');
+      alert('Erro ao criar grupo. Verifique se você é um Gestor.');
     } else {
       fetchGroups();
       setShowGroupModal(false);
@@ -177,6 +190,8 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
         setGroups(groups.filter(g => g.id !== groupId));
         if (activeChatId === groupId) setActiveChatId(null);
         alert('Grupo removido.');
+      } else {
+        alert('Erro ao remover grupo.');
       }
     }
   };
@@ -309,7 +324,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
               <i className="fa-solid fa-arrow-left text-xl"></i>
             </button>
 
-            {currentChatInfo && (
+            {currentChatInfo ? (
               <>
                 <div className="w-10 h-10 md:w-12 md:h-12 flex items-center justify-center shadow-lg shrink-0 bg-[#3533cd] rounded-xl">
                     <i className={`fa-solid ${currentChatInfo.icon} text-white text-lg`}></i>
@@ -324,6 +339,8 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
                   </p>
                 </div>
               </>
+            ) : (
+              <h3 className="font-black text-slate-400">Selecione um grupo</h3>
             )}
           </div>
 
@@ -343,7 +360,12 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
 
         {/* Message Container */}
         <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-4" ref={scrollRef} style={{ backgroundImage: 'radial-gradient(#3533cd15 1px, transparent 0)', backgroundSize: '24px 24px' }}>
-          {loadingMessages ? (
+          {!activeChatId ? (
+             <div className="h-full flex flex-col items-center justify-center text-slate-400">
+               <i className="fa-solid fa-comments text-4xl mb-4 text-slate-300"></i>
+               <p className="font-bold text-sm">Escolha um grupo para começar</p>
+             </div>
+          ) : loadingMessages ? (
              <div className="text-center py-10 text-slate-400 font-bold text-xs">Carregando mensagens...</div>
           ) : messages.length === 0 ? (
              <div className="text-center py-10 text-slate-400 font-bold text-xs">Seja o primeiro a enviar uma mensagem!</div>
@@ -352,12 +374,12 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
               <div key={msg.id} className={`flex ${msg.user_id === user.id ? 'justify-end' : 'justify-start'}`}>
                  <div className={`flex items-end gap-2 max-w-[85%] md:max-w-[70%] ${msg.user_id === user.id ? 'flex-row-reverse' : 'flex-row'}`}>
                     {/* Avatar small next to message */}
-                    <div className="w-6 h-6 rounded-full bg-slate-200 shrink-0 overflow-hidden hidden md:block">
+                    <div className="w-6 h-6 rounded-full bg-slate-200 shrink-0 overflow-hidden hidden md:block border border-slate-300">
                         {msg.profiles?.avatar_url ? <img src={msg.profiles.avatar_url} className="w-full h-full object-cover" /> : null}
                     </div>
 
                     <div className={`flex flex-col ${msg.user_id === user.id ? 'items-end' : 'items-start'}`}>
-                      {msg.user_id !== user.id && <span className="text-[10px] font-black text-[#3533cd] mb-1 ml-2">{msg.profiles?.name || 'Usuário'}</span>}
+                      {msg.user_id !== user.id && <span className="text-[10px] font-black text-[#3533cd] mb-1 ml-2">{msg.profiles?.name || 'Membro Emaús'}</span>}
                       <div className={`px-4 py-2.5 rounded-2xl text-xs md:text-sm font-medium shadow-sm border ${
                         msg.user_id === user.id ? 'bg-[#3533cd] text-white border-[#3533cd] rounded-tr-none' : 'bg-white text-slate-800 border-slate-100 rounded-tl-none'
                       }`}>
@@ -380,17 +402,22 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Digite uma mensagem..."
-              className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-medium text-black text-sm px-2"
+              placeholder={activeChatId ? "Digite uma mensagem..." : "Selecione um grupo..."}
+              disabled={!activeChatId}
+              className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-medium text-black text-sm px-2 disabled:cursor-not-allowed"
             />
-            <button type="submit" disabled={!input.trim()} className={`${input.trim() ? 'bg-[#3533cd]' : 'bg-slate-200'} text-white w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-95`}>
-              <i className="fa-solid fa-paper-plane text-sm"></i>
+            <button 
+              type="submit" 
+              disabled={!input.trim() || !activeChatId || sending} 
+              className={`${input.trim() && activeChatId ? 'bg-[#3533cd]' : 'bg-slate-200'} text-white w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg transition-all active:scale-95 disabled:active:scale-100`}
+            >
+              {sending ? <i className="fa-solid fa-spinner animate-spin text-sm"></i> : <i className="fa-solid fa-paper-plane text-sm"></i>}
             </button>
           </form>
         </div>
       </div>
 
-      {/* Modal de Grupo Estratégico (Adicionar) - Exclusivo Gestor */}
+      {/* Modais de Grupo e Perfil (Mantidos iguais) */}
       {showGroupModal && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
           <div className="bg-white w-full max-w-xl rounded-[2.5rem] p-10 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]">
@@ -468,7 +495,6 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
         </div>
       )}
 
-      {/* Profile Modal View Only */}
       {selectedMember && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
           <div className="bg-white w-full max-w-sm rounded-[2.5rem] overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
