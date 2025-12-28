@@ -1,18 +1,46 @@
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { User } from '../types';
+import { User, UserRole } from '../types';
+import { supabase } from '../services/supabase';
 
 const Home: React.FC<{ user: User }> = ({ user }) => {
+  const [announcement, setAnnouncement] = useState({
+    title: "Carregando aviso...",
+    content: "...",
+    author: "Sistema"
+  });
+
+  useEffect(() => {
+    const fetchAnnouncement = async () => {
+      const { data, error } = await supabase
+        .from('announcements')
+        .select('*')
+        .eq('active', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (data && !error) {
+        setAnnouncement({
+          title: data.title,
+          content: data.content,
+          author: data.author
+        });
+      } else {
+        setAnnouncement({
+          title: "Sem avisos novos",
+          content: "Fique atento às novidades da comunidade em breve.",
+          author: "Admin"
+        });
+      }
+    };
+    fetchAnnouncement();
+  }, []);
+
   const verseOfTheDay = {
     text: "Lâmpada para os meus pés é tua palavra, e luz para o meu caminho.",
     reference: "Salmos 119:105"
-  };
-
-  const weeklyWord = {
-    title: "A Perseverança no Caminho",
-    author: "Gestor Davi",
-    content: "Querida juventude, esta semana meditamos na importância de manter o foco em Cristo, mesmo quando as distrações do mundo tentam nos afastar. Lembrem-se que Ele caminha ao nosso lado, assim como fez com os discípulos a caminho de Emaús."
   };
 
   const shortcuts = [
@@ -91,19 +119,21 @@ const Home: React.FC<{ user: User }> = ({ user }) => {
               </div>
               
               <div className="flex-1">
-                <h4 className="font-black text-xl mb-3 text-blue-200">{weeklyWord.title}</h4>
+                <h4 className="font-black text-xl mb-3 text-blue-200">{announcement.title}</h4>
                 <p className="text-white/80 text-sm leading-relaxed font-medium">
-                  {weeklyWord.content}
+                  {announcement.content}
                 </p>
               </div>
 
               <div className="mt-8 pt-6 border-t border-white/10 flex items-center gap-3">
                 <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-black text-white text-xs border border-white/20">
-                  {weeklyWord.author[0]}
+                  {announcement.author ? announcement.author[0] : 'G'}
                 </div>
                 <div>
-                  <p className="text-xs font-black">{weeklyWord.author}</p>
-                  <p className="text-[10px] text-white/50 font-bold uppercase tracking-widest">Gestor da Plataforma</p>
+                  <p className="text-xs font-black">{announcement.author}</p>
+                  <p className="text-[10px] text-white/50 font-bold uppercase tracking-widest">
+                    {user.role === UserRole.ADMIN ? 'Você (Gestor)' : 'Gestor da Plataforma'}
+                  </p>
                 </div>
               </div>
             </div>

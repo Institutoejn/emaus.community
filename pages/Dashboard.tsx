@@ -14,15 +14,12 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
   const [searchTerm, setSearchTerm] = useState('');
   const [newCourse, setNewCourse] = useState({ title: '', description: '', url: '' });
   
+  // Announcements State
+  const [announcement, setAnnouncement] = useState({ title: '', content: '' });
+  
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(true);
-
-  const trendingTopics = [
-    { topic: 'Ansiedade e Paz', count: '45%', icon: 'fa-heart-pulse' },
-    { topic: 'Propósito de Vida', count: '32%', icon: 'fa-compass' },
-    { topic: 'Perdão Familiar', count: '23%', icon: 'fa-hands-holding-child' }
-  ];
 
   useEffect(() => {
     fetchUsers();
@@ -38,7 +35,6 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
 
       if (error) throw error;
       if (data) {
-        // Mapeamento correto para o Dashboard
         const mappedUsers: User[] = data.map((u: any) => ({
           id: u.id,
           name: u.name,
@@ -57,6 +53,28 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
       console.error("Erro ao buscar usuários:", error);
     } finally {
       setLoadingUsers(false);
+    }
+  };
+
+  const handlePublishAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!announcement.title || !announcement.content) return;
+    
+    // Deactivate old announcements (simple logic)
+    await supabase.from('announcements').update({ active: false }).neq('id', 0);
+    
+    const { error } = await supabase.from('announcements').insert([{
+      title: announcement.title,
+      content: announcement.content,
+      author: 'Gestor Davi',
+      active: true
+    }]);
+
+    if (!error) {
+      alert('Aviso publicado na Home!');
+      setAnnouncement({ title: '', content: '' });
+    } else {
+      alert('Erro ao publicar aviso.');
     }
   };
 
@@ -99,11 +117,7 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
   const handleDeleteUser = async (id: string) => {
     if (window.confirm('Atenção Gestor Davi: Tens a certeza que queres remover permanentemente este discípulo da plataforma?')) {
       try {
-        const { error } = await supabase
-          .from('profiles')
-          .delete()
-          .eq('id', id);
-
+        const { error } = await supabase.from('profiles').delete().eq('id', id);
         if (error) throw error;
         setUsers(users.filter(u => u.id !== id));
       } catch (error) {
@@ -121,7 +135,6 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
   const handleUpdateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
-    
     try {
       const { error } = await supabase
         .from('profiles')
@@ -129,12 +142,9 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
           name: editingUser.name,
           username: editingUser.username,
           interest: editingUser.interest,
-          // email: editingUser.email // Email update via Auth API usually required
         })
         .eq('id', editingUser.id);
-
       if (error) throw error;
-
       setUsers(users.map(u => u.id === editingUser.id ? editingUser : u));
       setIsEditModalOpen(false);
       setEditingUser(null);
@@ -185,42 +195,33 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
           </div>
         </div>
 
-        <div className="md:col-span-2 emaus-card p-6 rounded-[1.5rem] flex flex-col justify-between">
-          <div className="flex justify-between items-start mb-2">
-            <div>
-              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Crescimento (7 dias)</p>
-              <h4 className="text-2xl font-black text-black">+12%</h4>
-            </div>
-            <i className="fa-solid fa-chart-line text-[#3533cd]"></i>
-          </div>
-          <div className="h-12 w-full">
-             <svg viewBox="0 0 100 20" className="w-full h-full overflow-visible">
-                <path 
-                  d="M0,20 Q15,18 25,12 T50,15 T75,5 T100,2" 
-                  fill="none" 
-                  stroke="#3533cd" 
-                  strokeWidth="3" 
-                  strokeLinecap="round"
-                />
-                <path 
-                  d="M0,20 Q15,18 25,12 T50,15 T75,5 T100,2 L100,20 L0,20" 
-                  fill="url(#gradient)" 
-                  className="opacity-20"
-                />
-                <defs>
-                  <linearGradient id="gradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                    <stop offset="0%" style={{stopColor:'#3533cd', stopOpacity:1}} />
-                    <stop offset="100%" style={{stopColor:'#3533cd', stopOpacity:0}} />
-                  </linearGradient>
-                </defs>
-             </svg>
-          </div>
+        <div className="md:col-span-2 emaus-card p-6 rounded-[1.5rem] flex flex-col justify-center gap-2">
+           <h4 className="text-sm font-black text-black uppercase tracking-widest">Publicar Aviso na Home</h4>
+           <form onSubmit={handlePublishAnnouncement} className="flex gap-2">
+              <input 
+                type="text" 
+                placeholder="Título" 
+                className="w-1/3 bg-slate-50 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-[#3533cd]"
+                value={announcement.title}
+                onChange={e => setAnnouncement({...announcement, title: e.target.value})}
+              />
+              <input 
+                type="text" 
+                placeholder="Mensagem" 
+                className="flex-1 bg-slate-50 rounded-lg px-3 py-2 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-[#3533cd]"
+                value={announcement.content}
+                onChange={e => setAnnouncement({...announcement, content: e.target.value})}
+              />
+              <button type="submit" className="bg-[#3533cd] text-white px-4 rounded-lg font-black text-xs hover:bg-blue-700">
+                Enviar
+              </button>
+           </form>
         </div>
       </div>
 
-      {/* Course Form & Analytics */}
+      {/* Course Form */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 emaus-card p-8 rounded-[2rem] bg-white">
+        <div className="col-span-full emaus-card p-8 rounded-[2rem] bg-white">
           <h3 className="text-xl font-black text-black mb-6 flex items-center gap-3">
             <i className="fa-solid fa-plus-circle text-[#3533cd]"></i>
             Lançar Novo Conteúdo
@@ -267,36 +268,6 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
               </button>
             </div>
           </form>
-        </div>
-
-        <div className="emaus-card p-8 rounded-[2rem] bg-[#3533cd] text-white border-none relative overflow-hidden flex flex-col justify-center">
-          <div className="relative z-10">
-            <div className="flex items-center gap-2 mb-6">
-              <div className="bg-white/20 p-2 rounded-lg backdrop-blur-md">
-                <i className="fa-solid fa-fire-flame-curved text-orange-400"></i>
-              </div>
-              <h3 className="text-lg font-black uppercase tracking-tighter">Termômetro de IA</h3>
-            </div>
-            <div className="space-y-6">
-              {trendingTopics.map((item, idx) => (
-                <div key={idx} className="flex items-center gap-4 group cursor-default">
-                  <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center group-hover:bg-white/20 transition-all">
-                    <i className={`fa-solid ${item.icon} text-white`}></i>
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex justify-between text-xs font-black mb-1.5">
-                      <span>{item.topic}</span>
-                      <span>{item.count}</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
-                      <div className="h-full bg-white rounded-full transition-all duration-1000" style={{ width: item.count }}></div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="absolute -bottom-10 -right-10 w-32 h-32 bg-white/5 rounded-full blur-2xl"></div>
         </div>
       </div>
 
@@ -392,9 +363,6 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
             </table>
           )}
         </div>
-        <div className="p-6 bg-slate-50/50 border-t border-slate-100 flex justify-center">
-           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fim da Lista de Membros • Total: {filteredUsers.length}</p>
-        </div>
       </div>
 
       {/* Modal de Edição de Usuário */}
@@ -449,17 +417,6 @@ const Dashboard: React.FC<DashboardProps> = ({ courses, onAddCourse, refreshCour
                     <option value="Salmos e Poesia">Salmos e Poesia</option>
                     <option value="Liderança Cristã">Liderança Cristã</option>
                   </select>
-                </div>
-
-                <div className="md:col-span-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2 ml-1">Email</label>
-                  <input 
-                    type="email" 
-                    required
-                    value={editingUser.email}
-                    onChange={e => setEditingUser({...editingUser, email: e.target.value})}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-5 py-4 font-bold text-sm focus:ring-2 focus:ring-[#3533cd] focus:outline-none"
-                  />
                 </div>
               </div>
 
