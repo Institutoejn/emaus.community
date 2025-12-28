@@ -19,7 +19,7 @@ interface ChatMessage {
   profiles: {
     name: string;
     avatar_url: string;
-  };
+  } | null; // Profile pode ser null se o usuário foi deletado
 }
 
 const Community: React.FC<{ user: User }> = ({ user }) => {
@@ -52,26 +52,26 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     fetchGroups();
     fetchMembers();
 
-    // Polling para manter grupos atualizados
-    const interval = setInterval(fetchGroups, 15000); 
+    // Polling de segurança para grupos (caso realtime falhe)
+    const interval = setInterval(fetchGroups, 20000); 
     return () => clearInterval(interval);
   }, []);
 
-  // 2. Fetch Messages when Active Chat Changes
+  // 2. Fetch Messages & Realtime Subscription
   useEffect(() => {
     if (activeChatId) {
       fetchMessages(activeChatId);
       
-      // Subscribe to new messages in this group
       const channel = supabase
-        .channel(`chat:${activeChatId}`)
+        .channel(`chat_room:${activeChatId}`)
         .on('postgres_changes', { 
           event: 'INSERT', 
           schema: 'public', 
           table: 'chat_messages', 
           filter: `group_id=eq.${activeChatId}` 
         }, 
-        () => {
+        (payload) => {
+           // Opcional: Adicionar mensagem localmente antes do fetch para velocidade
            fetchMessages(activeChatId);
         })
         .subscribe();
@@ -80,18 +80,23 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     }
   }, [activeChatId]);
 
-  // Auto-scroll
+  // Auto-scroll inteligente
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      // Pequeno delay para garantir que o DOM renderizou as novas mensagens
+      setTimeout(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      }, 100);
     }
   }, [messages, isChatVisibleMobile, loadingMessages]);
 
   const fetchGroups = async () => {
-    const { data } = await supabase.from('chat_groups').select('*').order('created_at', { ascending: true });
+    const { data, error } = await supabase.from('chat_groups').select('*').order('created_at', { ascending: true });
+    if (error) console.error("Erro grupos:", error);
     if (data) {
       setGroups(data);
-      // Select first group if none selected
       if (!activeChatId && data.length > 0) setActiveChatId(data[0].id);
     }
   };
@@ -113,9 +118,9 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
   };
 
   const fetchMessages = async (groupId: number) => {
-    // Não seta loading true se já tiver mensagens (para evitar piscar no polling/realtime)
     if (messages.length === 0) setLoadingMessages(true);
     
+    // JOIN correto com a tabela profiles
     const { data, error } = await supabase
       .from('chat_messages')
       .select(`
@@ -127,10 +132,10 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
       `)
       .eq('group_id', groupId)
       .order('created_at', { ascending: true })
-      .limit(50);
+      .limit(100);
       
     if (error) {
-      console.error("Erro ao buscar mensagens:", error);
+      console.error("Erro RLS ou SQL ao buscar mensagens:", error);
     } else if (data) {
       setMessages(data as unknown as ChatMessage[]);
     }
@@ -142,23 +147,22 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     if (!input.trim() || !activeChatId) return;
 
     const text = input.trim();
-    setInput(''); // Limpa imediatamente para UX rápida
+    setInput('');
     setSending(true);
 
     try {
+      // Importante: Não enviamos 'created_at', deixamos o banco gerar
       const { error } = await supabase.from('chat_messages').insert([
         { group_id: activeChatId, user_id: user.id, content: text }
       ]);
 
       if (error) throw error;
-      
-      // O realtime deve atualizar, mas chamamos o fetch por garantia
       await fetchMessages(activeChatId);
       
     } catch (error: any) {
       console.error('Erro ao enviar:', error);
-      alert(`Erro ao enviar mensagem: ${error.message || 'Verifique sua conexão.'}`);
-      setInput(text); // Restaura o texto em caso de erro
+      alert(`Erro: ${error.message}`);
+      setInput(text);
     } finally {
       setSending(false);
     }
@@ -175,7 +179,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
     }]);
 
     if (error) {
-      alert('Erro ao criar grupo. Verifique se você é um Gestor.');
+      alert('Erro ao criar grupo. Verifique permissões.');
     } else {
       fetchGroups();
       setShowGroupModal(false);
@@ -184,14 +188,11 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
   };
 
   const handleDeleteGroup = async (groupId: number) => {
-    if (window.confirm('Atenção Gestor: Tens a certeza que queres excluir permanentemente este grupo?')) {
+    if (window.confirm('Excluir este grupo e todas as mensagens?')) {
       const { error } = await supabase.from('chat_groups').delete().eq('id', groupId);
       if (!error) {
         setGroups(groups.filter(g => g.id !== groupId));
         if (activeChatId === groupId) setActiveChatId(null);
-        alert('Grupo removido.');
-      } else {
-        alert('Erro ao remover grupo.');
       }
     }
   };
@@ -211,7 +212,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
   return (
     <div className="h-full flex emaus-card rounded-[1.5rem] md:rounded-[2.5rem] overflow-hidden shadow-2xl shadow-blue-500/5 bg-white border-2 border-[#3533cd] relative">
       
-      {/* Sidebar - Chat & Member List */}
+      {/* Sidebar */}
       <div className={`flex flex-col w-full lg:w-80 border-r border-slate-100 bg-slate-50/50 shrink-0 ${isChatVisibleMobile ? 'hidden lg:flex' : 'flex'}`}>
         <div className="p-6 bg-white border-b border-slate-100">
           <div className="flex items-center justify-between mb-4">
@@ -221,7 +222,6 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
               <button 
                 onClick={() => { setGroupFormData({ name: '', description: '', icon: 'fa-users', type: 'public' }); setShowGroupModal(true); }}
                 className="w-10 h-10 rounded-xl bg-[#3533cd] text-white flex items-center justify-center hover:scale-110 transition-all shadow-lg active:scale-95"
-                title="Novo Grupo Estratégico"
               >
                 <i className="fa-solid fa-plus text-sm"></i>
               </button>
@@ -229,25 +229,10 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
           </div>
           
           <div className="flex p-1 bg-slate-100 rounded-xl mb-4">
-            <button 
-              onClick={() => setActiveTab('groups')}
-              className={`flex-1 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${
-                activeTab === 'groups' ? 'bg-white text-[#3533cd] shadow-sm' : 'text-slate-400'
-              }`}
-            >
-              Grupos
-            </button>
-            <button 
-              onClick={() => setActiveTab('users')}
-              className={`flex-1 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${
-                activeTab === 'users' ? 'bg-white text-[#3533cd] shadow-sm' : 'text-slate-400'
-              }`}
-            >
-              Membros
-            </button>
+            <button onClick={() => setActiveTab('groups')} className={`flex-1 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${activeTab === 'groups' ? 'bg-white text-[#3533cd] shadow-sm' : 'text-slate-400'}`}>Grupos</button>
+            <button onClick={() => setActiveTab('users')} className={`flex-1 py-1.5 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all ${activeTab === 'users' ? 'bg-white text-[#3533cd] shadow-sm' : 'text-slate-400'}`}>Membros</button>
           </div>
 
-          {/* Search Bar for Groups */}
           {activeTab === 'groups' && (
             <div className="relative">
               <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
@@ -333,10 +318,19 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
                   <h3 className="font-black text-black text-sm md:text-base truncate">
                     {currentChatInfo.name}
                   </h3>
-                  <p className="text-[10px] md:text-xs font-bold text-green-500 flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                    Chat em tempo real
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] md:text-xs font-bold text-green-500 flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
+                      Online
+                    </p>
+                    <button 
+                      onClick={() => activeChatId && fetchMessages(activeChatId)}
+                      className="text-[10px] text-slate-400 hover:text-[#3533cd] font-bold"
+                      title="Forçar atualização"
+                    >
+                      <i className="fa-solid fa-rotate-right ml-1"></i>
+                    </button>
+                  </div>
                 </div>
               </>
             ) : (
@@ -344,13 +338,11 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
             )}
           </div>
 
-          {/* Botões de Gestão do Grupo - Somente Gestor */}
           {user.role === UserRole.ADMIN && activeTab === 'groups' && activeChatId && (
             <div className="flex gap-2">
               <button 
                 onClick={() => handleDeleteGroup(activeChatId)}
                 className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center hover:bg-red-100 transition-all shadow-sm active:scale-95"
-                title="Excluir Grupo Permanentemente"
               >
                 <i className="fa-solid fa-trash-can text-sm"></i>
               </button>
@@ -366,26 +358,40 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
                <p className="font-bold text-sm">Escolha um grupo para começar</p>
              </div>
           ) : loadingMessages ? (
-             <div className="text-center py-10 text-slate-400 font-bold text-xs">Carregando mensagens...</div>
+             <div className="text-center py-10 text-slate-400 font-bold text-xs flex flex-col items-center gap-2">
+               <i className="fa-solid fa-circle-notch animate-spin text-xl text-[#3533cd]"></i>
+               Carregando mensagens...
+             </div>
           ) : messages.length === 0 ? (
-             <div className="text-center py-10 text-slate-400 font-bold text-xs">Seja o primeiro a enviar uma mensagem!</div>
+             <div className="text-center py-10 text-slate-400 font-bold text-xs">
+               <p>Nenhuma mensagem ainda.</p>
+               <p className="text-[10px] mt-1 opacity-70">Seja o primeiro a escrever!</p>
+             </div>
           ) : (
             messages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.user_id === user.id ? 'justify-end' : 'justify-start'}`}>
                  <div className={`flex items-end gap-2 max-w-[85%] md:max-w-[70%] ${msg.user_id === user.id ? 'flex-row-reverse' : 'flex-row'}`}>
-                    {/* Avatar small next to message */}
+                    {/* Avatar */}
                     <div className="w-6 h-6 rounded-full bg-slate-200 shrink-0 overflow-hidden hidden md:block border border-slate-300">
-                        {msg.profiles?.avatar_url ? <img src={msg.profiles.avatar_url} className="w-full h-full object-cover" /> : null}
+                        {msg.profiles?.avatar_url ? (
+                          <img src={msg.profiles.avatar_url} className="w-full h-full object-cover" alt="avatar" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-[8px] font-bold text-slate-400">?</div>
+                        )}
                     </div>
 
                     <div className={`flex flex-col ${msg.user_id === user.id ? 'items-end' : 'items-start'}`}>
-                      {msg.user_id !== user.id && <span className="text-[10px] font-black text-[#3533cd] mb-1 ml-2">{msg.profiles?.name || 'Membro Emaús'}</span>}
+                      {msg.user_id !== user.id && (
+                        <span className="text-[10px] font-black text-[#3533cd] mb-1 ml-2">
+                          {msg.profiles?.name || 'Membro Desconhecido'}
+                        </span>
+                      )}
                       <div className={`px-4 py-2.5 rounded-2xl text-xs md:text-sm font-medium shadow-sm border ${
                         msg.user_id === user.id ? 'bg-[#3533cd] text-white border-[#3533cd] rounded-tr-none' : 'bg-white text-slate-800 border-slate-100 rounded-tl-none'
                       }`}>
                         {msg.content}
                         <div className={`mt-1 flex items-center justify-end gap-1 text-[9px] font-bold ${msg.user_id === user.id ? 'text-white/70' : 'text-slate-400'}`}>
-                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {msg.created_at ? new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...'}
                         </div>
                       </div>
                     </div>
@@ -417,7 +423,7 @@ const Community: React.FC<{ user: User }> = ({ user }) => {
         </div>
       </div>
 
-      {/* Modais de Grupo e Perfil (Mantidos iguais) */}
+      {/* Modais mantidos iguais, sem alteração */}
       {showGroupModal && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
           <div className="bg-white w-full max-w-xl rounded-[2.5rem] p-10 shadow-2xl animate-in zoom-in-95 duration-200 overflow-y-auto max-h-[90vh]">
