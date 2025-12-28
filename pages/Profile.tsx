@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { User, UserRole } from '../types';
 import { supabase } from '../services/supabase';
 
@@ -9,6 +9,7 @@ interface ProfileProps {
 }
 
 const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
+  // Inicializa o estado com os dados do usuário
   const [formData, setFormData] = useState({
     name: user.name || '',
     email: user.email || '',
@@ -17,21 +18,29 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
     avatarUrl: user.avatarUrl || ''
   });
   
-  // Novo estado para guardar o arquivo real antes do upload
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Atualiza o formulário se o usuário mudar (ex: recarregamento externo)
+  useEffect(() => {
+    setFormData(prev => ({
+      ...prev,
+      name: user.name || prev.name,
+      avatarUrl: user.avatarUrl || prev.avatarUrl,
+      bio: user.bio || prev.bio,
+      phone: user.phone || prev.phone
+    }));
+  }, [user]);
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // 1. Guarda o arquivo para upload posterior
       setAvatarFile(file);
-
-      // 2. Cria preview local para o usuário ver na hora
+      // Preview imediato
       const reader = new FileReader();
       reader.onloadend = () => {
-        setFormData({ ...formData, avatarUrl: reader.result as string });
+        setFormData(prev => ({ ...prev, avatarUrl: reader.result as string }));
       };
       reader.readAsDataURL(file);
     }
@@ -40,27 +49,23 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
   const uploadAvatar = async (userId: string, file: File): Promise<string | null> => {
     try {
       const fileExt = file.name.split('.').pop();
-      const fileName = `${userId}-${Math.random()}.${fileExt}`;
-      const filePath = `${fileName}`;
-
-      // Upload para o bucket 'avatars'
+      // Nome único com timestamp para evitar cache do navegador
+      const fileName = `avatar-${userId}-${Date.now()}.${fileExt}`;
+      
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, file);
+        .upload(fileName, file, { upsert: true });
 
-      if (uploadError) {
-        throw uploadError;
-      }
+      if (uploadError) throw uploadError;
 
-      // Pegar URL pública
       const { data } = supabase.storage
         .from('avatars')
-        .getPublicUrl(filePath);
+        .getPublicUrl(fileName);
 
       return data.publicUrl;
     } catch (error) {
-      console.error("Erro no upload da imagem:", error);
-      alert("Erro ao enviar a imagem. Tente uma menor ou verifique sua conexão.");
+      console.error("Erro detalhado no upload:", error);
+      alert("Erro ao enviar imagem para o servidor.");
       return null;
     }
   };
@@ -70,9 +75,9 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
     setIsSaving(true);
     
     try {
-      let finalAvatarUrl = formData.avatarUrl;
+      let finalAvatarUrl = user.avatarUrl; // Começa com a URL atual do usuário (não o preview)
 
-      // Se o usuário selecionou uma nova foto, faz o upload primeiro
+      // Se há um novo arquivo, faz o upload e pega a nova URL
       if (avatarFile) {
         const uploadedUrl = await uploadAvatar(user.id, avatarFile);
         if (uploadedUrl) {
@@ -80,38 +85,38 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
         }
       }
 
-      const updates = {
-        name: formData.name,
-        // email: formData.email, // Email não alteramos por aqui por segurança
-        phone: formData.phone,
-        bio: formData.bio,
-        avatar_url: finalAvatarUrl, // Salva a URL do Storage ou a antiga
-        updated_at: new Date(),
-      };
-
+      // Atualiza o banco de dados
       const { error } = await supabase
         .from('profiles')
-        .update(updates)
+        .update({
+          name: formData.name,
+          phone: formData.phone,
+          bio: formData.bio,
+          avatar_url: finalAvatarUrl,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', user.id);
 
       if (error) throw error;
 
-      // Update local state
+      // Atualiza o estado global da aplicação
       onUpdate({
         ...user,
         name: formData.name,
         phone: formData.phone,
         bio: formData.bio,
-        avatarUrl: finalAvatarUrl
+        avatarUrl: finalAvatarUrl // URL real do Supabase
       });
       
-      // Limpa o arquivo pendente pois já foi salvo
       setAvatarFile(null);
+      // Força a atualização do form local com a URL final (remove o base64 de preview)
+      setFormData(prev => ({ ...prev, avatarUrl: finalAvatarUrl || '' }));
+      
       alert('Perfil atualizado com sucesso!');
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erro ao atualizar perfil:', error);
-      alert('Erro ao salvar alterações.');
+      alert(`Erro ao salvar: ${error.message || 'Verifique sua conexão.'}`);
     } finally {
       setIsSaving(false);
     }
@@ -215,7 +220,7 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
                 ) : (
                   <i className="fa-solid fa-save"></i>
                 )}
-                {isSaving ? 'Enviando foto...' : 'Salvar Alterações'}
+                {isSaving ? 'Salvando...' : 'Salvar Alterações'}
               </button>
             </div>
           </div>
