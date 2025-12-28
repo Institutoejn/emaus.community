@@ -16,15 +16,19 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
     bio: user.bio || '',
     avatarUrl: user.avatarUrl || ''
   });
+  
+  // Novo estado para guardar o arquivo real antes do upload
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Nota: Idealmente, faríamos upload para o Supabase Storage aqui.
-      // Como não configuramos buckets, vamos manter o FileReader para base64 
-      // mas sabendo que o tamanho da string pode ser limitado no DB.
+      // 1. Guarda o arquivo para upload posterior
+      setAvatarFile(file);
+
+      // 2. Cria preview local para o usuário ver na hora
       const reader = new FileReader();
       reader.onloadend = () => {
         setFormData({ ...formData, avatarUrl: reader.result as string });
@@ -33,17 +37,55 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
     }
   };
 
+  const uploadAvatar = async (userId: string, file: File): Promise<string | null> => {
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${userId}-${Math.random()}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      // Upload para o bucket 'avatars'
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, file);
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      // Pegar URL pública
+      const { data } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath);
+
+      return data.publicUrl;
+    } catch (error) {
+      console.error("Erro no upload da imagem:", error);
+      alert("Erro ao enviar a imagem. Tente uma menor ou verifique sua conexão.");
+      return null;
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
     
     try {
+      let finalAvatarUrl = formData.avatarUrl;
+
+      // Se o usuário selecionou uma nova foto, faz o upload primeiro
+      if (avatarFile) {
+        const uploadedUrl = await uploadAvatar(user.id, avatarFile);
+        if (uploadedUrl) {
+          finalAvatarUrl = uploadedUrl;
+        }
+      }
+
       const updates = {
         name: formData.name,
-        // email: formData.email, // Email change in Supabase requires auth.updateUser, usually simpler to keep read-only here
+        // email: formData.email, // Email não alteramos por aqui por segurança
         phone: formData.phone,
         bio: formData.bio,
-        avatar_url: formData.avatarUrl,
+        avatar_url: finalAvatarUrl, // Salva a URL do Storage ou a antiga
         updated_at: new Date(),
       };
 
@@ -60,9 +102,13 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
         name: formData.name,
         phone: formData.phone,
         bio: formData.bio,
-        avatarUrl: formData.avatarUrl
+        avatarUrl: finalAvatarUrl
       });
+      
+      // Limpa o arquivo pendente pois já foi salvo
+      setAvatarFile(null);
       alert('Perfil atualizado com sucesso!');
+
     } catch (error) {
       console.error('Erro ao atualizar perfil:', error);
       alert('Erro ao salvar alterações.');
@@ -169,7 +215,7 @@ const Profile: React.FC<ProfileProps> = ({ user, onUpdate }) => {
                 ) : (
                   <i className="fa-solid fa-save"></i>
                 )}
-                Salvar Alterações
+                {isSaving ? 'Enviando foto...' : 'Salvar Alterações'}
               </button>
             </div>
           </div>
